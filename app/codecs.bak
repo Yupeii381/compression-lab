@@ -1,0 +1,425 @@
+"""Block codecs. Native adapters and deliberately simple reference implementations.
+
+Every method has its own encoder/decoder; unavailable native dependencies are
+reported explicitly. No method silently falls back to another algorithm.
+"""
+from __future__ import annotations
+
+import bz2
+import collections
+import heapq
+import importlib
+import importlib.metadata
+import lzma
+import platform
+import struct
+import zlib
+
+MAX_BLOCK_OUTPUT = 128 * 1024 * 1024
+
+
+def number(key, label, default, low, high, step=1):
+    return dict(key=key, label=label, type="number", default=default,
+                min=low, max=high, step=step)
+
+
+METHODS = [
+    dict(id="zstd", name="Zstandard", family="LZ", description="Современное сжатие: LZ77 и энтропийное кодирование.", module="zstandard", implementation="libzstd · C", parameters=[number("level", "Уровень", 3, 1, 22)]),
+    dict(id="lzma2", name="LZMA2", family="LZ", description="LZMA2 в контейнере XZ, с настраиваемым словарём.", implementation="liblzma · C", parameters=[number("level", "Уровень", 6, 0, 9), number("dictionary_mib", "Словарь, МиБ", 8, 1, 64)]),
+    dict(id="lzma1", name="LZMA1", family="LZ", description="LZMA1 в исходном контейнере .lzma.", implementation="liblzma · C", parameters=[number("level", "Уровень", 6, 0, 9), number("dictionary_mib", "Словарь, МиБ", 8, 1, 64)]),
+    dict(id="gzip", name="Gzip", family="LZ", description="DEFLATE с заголовком Gzip и контрольной суммой.", implementation="zlib · C", parameters=[number("level", "Уровень", 6, 0, 9)]),
+    dict(id="deflate", name="DEFLATE", family="LZ", description="LZ77 + Huffman; поток без внешнего контейнера.", implementation="zlib · C", parameters=[number("level", "Уровень", 6, 0, 9), number("window_bits", "Окно, бит", 15, 9, 15)]),
+    dict(id="lz4", name="LZ4", family="LZ", description="Быстрый LZ77-кодек с проверкой целостности кадра.", module="lz4.frame", implementation="liblz4 · C", parameters=[number("level", "Уровень", 0, 0, 16)]),
+    dict(id="lzfse", name="LZFSE", family="LZ", description="Оригинальная реализация Apple: LZ + FSE.", module="lzfse", implementation="Apple LZFSE · C", parameters=[]),
+    dict(id="brotli", name="Brotli", family="LZ", description="LZ77, Huffman и встроенный словарь.", module="brotli", implementation="Google Brotli · C/C++", parameters=[number("quality", "Качество", 5, 0, 11), number("lgwin", "Окно, бит", 22, 10, 24)]),
+    dict(id="ppmd", name="PPMd", family="PPM", description="Prediction by Partial Matching, вариант I.2. «PPMP» принято как PPMd.", module="pyppmd", implementation="PPMd I.2 · C", parameters=[number("order", "Порядок модели", 6, 2, 16), number("memory_mib", "Память, МиБ", 16, 1, 128)]),
+    dict(id="bzip2", name="Bzip2", family="BWT", description="Burrows–Wheeler, MTF, RLE и Huffman.", implementation="libbzip2 · C", parameters=[number("level", "Уровень", 6, 1, 9)]),
+    dict(id="huffman", name="Huffman", family="Entropy", description="Канонический побайтовый код Хаффмана; таблица кодов входит в размер.", implementation="Эталонная · Python", parameters=[]),
+    dict(id="rle", name="RLE", family="RLE", description="PackBits: серии и блоки буквальных байтов.", implementation="Эталонная · Python", parameters=[number("min_run", "Минимальная серия", 3, 2, 8)]),
+    dict(id="lz77", name="LZ77", family="LZ", description="Скользящее окно и поиск совпадений; собственный формат токенов.", implementation="Эталонная · Python", parameters=[number("window_kib", "Окно, КиБ", 32, 1, 64), number("search_depth", "Глубина поиска", 16, 1, 128)]),
+    dict(id="lz78", name="LZ78", family="LZ", description="Словарь фраз, пары индекс–символ; сброс словаря при заполнении.", implementation="Эталонная · Python", parameters=[number("dictionary_size", "Фраз в словаре", 65536, 256, 262144)]),
+    dict(id="lzw", name="LZW", family="LZ", description="Фиксированные 16-битные коды со сбросом словаря.", implementation="Эталонная · Python", parameters=[number("dictionary_size", "Кодов в словаре", 65536, 512, 65536)]),
+]
+BY_ID = {m["id"]: m for m in METHODS}
+
+
+def catalog():
+    result = []
+    for method in METHODS:
+        item = dict(method)
+        item["available"] = True
+        item["version"] = ("reference 1.0" if "Python" in item["implementation"]
+                           else "CPython " + platform.python_version() + " stdlib")
+        if item["id"] in ("gzip","deflate"):
+            item["version"] = "zlib " + zlib.ZLIB_RUNTIME_VERSION
+        if module := item.get("module"):
+            try:
+                importlib.import_module(module)
+                package = {"lz4.frame": "lz4"}.get(module, module)
+                item["version"] = importlib.metadata.version(package)
+            except ImportError:
+                item["available"] = False
+                item["version"] = "Не установлен пакет " + module
+        result.append(item)
+    return result
+
+
+def normalize_step(step):
+    if not isinstance(step, dict):
+        raise ValueError("Шаг должен быть объектом с методом и параметрами")
+    method_id = step.get("method")
+    if method_id == "ppmp":
+        method_id = "ppmd"
+    if not isinstance(method_id,str) or method_id not in BY_ID:
+        raise ValueError("Неизвестный метод: " + str(method_id))
+    method = BY_ID[method_id]
+    if module := method.get("module"):
+        try:
+            importlib.import_module(module)
+        except ImportError as e:
+            raise ValueError(f"Для {method['name']} установите {module}") from e
+    supplied = step.get("params", {})
+    if not isinstance(supplied, dict):
+        raise ValueError("Параметры должны быть объектом")
+    if set(supplied) - {p["key"] for p in method["parameters"]}:
+        raise ValueError(f"Неизвестные параметры {method['name']}")
+    params = {}
+    for p in method["parameters"]:
+        value = supplied.get(p["key"], p["default"])
+        if isinstance(value, bool) or not isinstance(value, int) or not p["min"] <= value <= p["max"]:
+            raise ValueError(f"{p['label']}: требуется целое число от {p['min']} до {p['max']}")
+        params[p["key"]] = value
+    return dict(method=method_id, params=params)
+
+
+def rle_encode(data, min_run=3):
+    out = bytearray(b"RL1")
+    i = 0
+    while i < len(data):
+        run = 1
+        while run < 128 and i + run < len(data) and data[i + run] == data[i]:
+            run += 1
+        if run >= min_run:
+            out.extend((127 + run, data[i]))
+            i += run
+            continue
+        start = i
+        i += 1
+        while i - start < 128 and i < len(data):
+            run = 1
+            while run < min_run and i + run < len(data) and data[i + run] == data[i]:
+                run += 1
+            if run >= min_run:
+                break
+            i += 1
+        out.append(i - start - 1)
+        out.extend(data[start:i])
+    return bytes(out)
+
+
+def rle_decode(data):
+    if data[:3] != b"RL1":
+        raise ValueError("Неверный заголовок RLE")
+    out, i = bytearray(), 3
+    while i < len(data):
+        tag = data[i]
+        i += 1
+        if tag < 128:
+            n = tag + 1
+            if i + n > len(data):
+                raise ValueError("Оборванный блок RLE")
+            out.extend(data[i:i+n])
+            i += n
+        else:
+            if i >= len(data):
+                raise ValueError("Оборванная серия RLE")
+            out.extend(bytes([data[i]]) * (tag - 127))
+            i += 1
+        if len(out) > MAX_BLOCK_OUTPUT:
+            raise ValueError("Превышен размер блока")
+    return bytes(out)
+
+
+def canonical(lengths):
+    code, previous, codes = 0, 0, {}
+    for length, symbol in sorted((n, s) for s, n in enumerate(lengths) if n):
+        code <<= length - previous
+        codes[symbol] = (code, length)
+        code += 1
+        previous = length
+    return codes
+
+
+def huffman_encode(data):
+    frequencies = collections.Counter(data)
+    heap, seq = [], 0
+    for symbol, freq in sorted(frequencies.items()):
+        heapq.heappush(heap, (freq, seq, symbol))
+        seq += 1
+    lengths = [0] * 256
+    if len(heap) == 1:
+        lengths[heap[0][2]] = 1
+    elif heap:
+        while len(heap) > 1:
+            a, b = heapq.heappop(heap), heapq.heappop(heap)
+            heapq.heappush(heap, (a[0] + b[0], seq, (a[2], b[2])))
+            seq += 1
+        stack = [(heap[0][2], 0)]
+        while stack:
+            node, depth = stack.pop()
+            if isinstance(node, int):
+                lengths[node] = depth
+            else:
+                stack.extend([(node[0], depth+1), (node[1], depth+1)])
+    codes = canonical(lengths)
+    out = bytearray(b"HF1" + struct.pack("<Q", len(data)) + bytes(lengths))
+    acc = bits = 0
+    for symbol in data:
+        code, width = codes[symbol]
+        acc = (acc << width) | code
+        bits += width
+        while bits >= 8:
+            bits -= 8
+            out.append((acc >> bits) & 255)
+        acc &= (1 << bits) - 1
+    if bits:
+        out.append(acc << (8-bits))
+    return bytes(out)
+
+
+def huffman_decode(data):
+    if data[:3] != b"HF1" or len(data) < 267:
+        raise ValueError("Неверный заголовок Huffman")
+    size = struct.unpack_from("<Q", data, 3)[0]
+    if size > MAX_BLOCK_OUTPUT:
+        raise ValueError("Превышен размер блока")
+    if not size:
+        return b""
+    lookup = {(c, n): s for s, (c, n) in canonical(data[11:267]).items()}
+    out, code, width = bytearray(), 0, 0
+    for byte in data[267:]:
+        for shift in range(7, -1, -1):
+            code = (code << 1) | ((byte >> shift) & 1)
+            width += 1
+            symbol = lookup.get((code, width))
+            if symbol is not None:
+                out.append(symbol)
+                code = width = 0
+                if len(out) == size:
+                    return bytes(out)
+    raise ValueError("Оборванный поток Huffman")
+
+
+def lz77_encode(data, window_kib=32, search_depth=16):
+    out, literals, index = bytearray(b"L71"), bytearray(), {}
+    window, i = window_kib * 1024, 0
+    def flush():
+        if literals:
+            out.append(len(literals)-1)
+            out.extend(literals)
+            literals.clear()
+    while i < len(data):
+        best, distance = 0, 0
+        key = data[i:i+3]
+        candidates = index.get(key, ()) if len(key) == 3 else ()
+        for pos in reversed(candidates):
+            if i - pos > window:
+                break
+            length, maximum = 3, min(130, len(data)-i)
+            while length < maximum and data[pos+length] == data[i+length]:
+                length += 1
+            if length > best:
+                best, distance = length, i-pos
+                if best == maximum:
+                    break
+        advance = best if best >= 3 else 1
+        if best >= 3:
+            flush()
+            out.append(128 + best - 3)
+            out.extend(struct.pack("<I", distance))
+        else:
+            literals.append(data[i])
+            if len(literals) == 128:
+                flush()
+        for pos in range(i, i+advance):
+            key = data[pos:pos+3]
+            if len(key) == 3:
+                bucket = index.get(key)
+                if bucket is None:
+                    bucket = index[key] = collections.deque(maxlen=search_depth)
+                bucket.append(pos)
+        # A bounded hash index avoids retention growing with the whole block.
+        if len(index) > 131072:
+            index.clear()
+        i += advance
+    flush()
+    return bytes(out)
+
+
+def lz77_decode(data):
+    if data[:3] != b"L71":
+        raise ValueError("Неверный заголовок LZ77")
+    out, i = bytearray(), 3
+    while i < len(data):
+        tag = data[i]
+        i += 1
+        if tag < 128:
+            n = tag+1
+            if i+n > len(data):
+                raise ValueError("Оборванный поток LZ77")
+            out.extend(data[i:i+n])
+            i += n
+        else:
+            if i+4 > len(data):
+                raise ValueError("Оборванная ссылка LZ77")
+            distance = struct.unpack_from("<I", data, i)[0]
+            i += 4
+            if not 0 < distance <= len(out):
+                raise ValueError("Неверная ссылка LZ77")
+            for _ in range(tag-128+3):
+                out.append(out[-distance])
+        if len(out) > MAX_BLOCK_OUTPUT:
+            raise ValueError("Превышен размер блока")
+    return bytes(out)
+
+
+def lz78_encode(data, dictionary_size=65536):
+    out = bytearray(b"L81" + struct.pack("<I", dictionary_size))
+    trie, next_code, prefix = {}, 1, 0
+    for byte in data:
+        key = (prefix, byte)
+        if key in trie:
+            prefix = trie[key]
+        else:
+            out.extend(struct.pack("<IB", prefix, byte))
+            trie[key] = next_code
+            next_code += 1
+            prefix = 0
+            if next_code >= dictionary_size:
+                trie.clear()
+                next_code = 1
+    if prefix:
+        out.extend(struct.pack("<I", prefix))
+    return bytes(out)
+
+
+def lz78_decode(data):
+    if data[:3] != b"L81" or len(data) < 7:
+        raise ValueError("Неверный заголовок LZ78")
+    limit = struct.unpack_from("<I", data, 3)[0]
+    if not 256 <= limit <= 262144:
+        raise ValueError("Неверный словарь LZ78")
+    dictionary, out, i = [b""], bytearray(), 7
+    while i < len(data):
+        if i+4 > len(data):
+            raise ValueError("Оборванный поток LZ78")
+        prefix = struct.unpack_from("<I", data, i)[0]
+        i += 4
+        if prefix >= len(dictionary):
+            raise ValueError("Неверная ссылка LZ78")
+        phrase = dictionary[prefix]
+        if i < len(data):
+            phrase += bytes([data[i]])
+            i += 1
+            dictionary.append(phrase)
+        out.extend(phrase)
+        if len(dictionary) >= limit:
+            dictionary = [b""]
+        if len(out) > MAX_BLOCK_OUTPUT:
+            raise ValueError("Превышен размер блока")
+    return bytes(out)
+
+
+def lzw_encode(data, dictionary_size=65536):
+    out = bytearray(b"LW1" + struct.pack("<I", dictionary_size))
+    dictionary, next_code, phrase = {bytes([b]): b for b in range(256)}, 256, b""
+    for byte in data:
+        candidate = phrase + bytes([byte])
+        if candidate in dictionary:
+            phrase = candidate
+        else:
+            out.extend(struct.pack("<H", dictionary[phrase]))
+            if next_code < dictionary_size:
+                dictionary[candidate] = next_code
+                next_code += 1
+            else:
+                dictionary, next_code = {bytes([b]): b for b in range(256)}, 256
+            phrase = bytes([byte])
+    if phrase:
+        out.extend(struct.pack("<H", dictionary[phrase]))
+    return bytes(out)
+
+
+def lzw_decode(data):
+    if data[:3] != b"LW1" or len(data) < 7 or (len(data)-7) % 2:
+        raise ValueError("Неверный поток LZW")
+    limit = struct.unpack_from("<I", data, 3)[0]
+    if not 512 <= limit <= 65536:
+        raise ValueError("Неверный словарь LZW")
+    dictionary, previous, out = [bytes([b]) for b in range(256)], None, bytearray()
+    for (code,) in struct.iter_unpack("<H", data[7:]):
+        if code < len(dictionary):
+            phrase = dictionary[code]
+        elif code == len(dictionary) and previous is not None:
+            phrase = previous + previous[:1]
+        else:
+            raise ValueError("Неверный код LZW")
+        out.extend(phrase)
+        if previous is not None:
+            dictionary.append(previous + phrase[:1])
+        previous = phrase
+        if len(dictionary) >= limit:
+            # Encoder resets when it tries to insert *after* filling the table.
+            dictionary = [bytes([b]) for b in range(256)]
+            previous = None
+        if len(out) > MAX_BLOCK_OUTPUT:
+            raise ValueError("Превышен размер блока")
+    return bytes(out)
+
+
+def encode(data: bytes, step: dict) -> bytes:
+    m, p = step["method"], step["params"]
+    if m == "rle": return rle_encode(data, **p)
+    if m == "huffman": return huffman_encode(data)
+    if m == "lz77": return lz77_encode(data, **p)
+    if m == "lz78": return lz78_encode(data, **p)
+    if m == "lzw": return lzw_encode(data, **p)
+    if m in ("gzip", "deflate"):
+        wbits = 31 if m == "gzip" else -p["window_bits"]
+        c = zlib.compressobj(p["level"], zlib.DEFLATED, wbits)
+        return c.compress(data) + c.flush()
+    if m == "bzip2": return bz2.compress(data, compresslevel=p["level"])
+    if m in ("lzma1", "lzma2"):
+        filt = dict(id=lzma.FILTER_LZMA1 if m == "lzma1" else lzma.FILTER_LZMA2,
+                    preset=p["level"], dict_size=p["dictionary_mib"] << 20)
+        return lzma.compress(data, format=lzma.FORMAT_ALONE if m == "lzma1" else lzma.FORMAT_XZ, filters=[filt])
+    if m == "zstd": return importlib.import_module("zstandard").ZstdCompressor(level=p["level"], write_checksum=True).compress(data)
+    if m == "lz4": return importlib.import_module("lz4.frame").compress(data, compression_level=p["level"], content_checksum=True)
+    if m == "lzfse": return importlib.import_module("lzfse").compress(data)
+    if m == "brotli": return importlib.import_module("brotli").compress(data, quality=p["quality"], lgwin=p["lgwin"])
+    if m == "ppmd": return importlib.import_module("pyppmd").compress(data, max_order=p["order"], mem_size=p["memory_mib"] << 20, variant="I")
+    raise ValueError("Неизвестный метод")
+
+
+def decode(data: bytes, step: dict) -> bytes:
+    m, p = step["method"], step["params"]
+    if m == "rle": return rle_decode(data)
+    if m == "huffman": return huffman_decode(data)
+    if m == "lz77": return lz77_decode(data)
+    if m == "lz78": return lz78_decode(data)
+    if m == "lzw": return lzw_decode(data)
+    if m == "gzip": return zlib.decompress(data, 31)
+    if m == "deflate": return zlib.decompress(data, -p["window_bits"])
+    if m == "bzip2": return bz2.decompress(data)
+    if m in ("lzma1", "lzma2"): return lzma.decompress(data, memlimit=256 << 20)
+    if m == "zstd": return importlib.import_module("zstandard").ZstdDecompressor().decompress(data, max_output_size=MAX_BLOCK_OUTPUT)
+    if m == "lz4": return importlib.import_module("lz4.frame").decompress(data)
+    if m == "lzfse":
+        # pylzfse emits a valid empty uncompressed frame but raises when the
+        # decoded length is zero. Handle that exact native frame explicitly.
+        if data == b"bvx-\x00\x00\x00\x00bvx$":
+            return b""
+        return importlib.import_module("lzfse").decompress(data)
+    if m == "brotli": return importlib.import_module("brotli").decompress(data)
+    if m == "ppmd": return importlib.import_module("pyppmd").decompress(data, max_order=p["order"], mem_size=p["memory_mib"] << 20, variant="I")
+    raise ValueError("Неизвестный метод")
