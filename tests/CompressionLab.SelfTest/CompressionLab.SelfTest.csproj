@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../examples/CompressionLab.Codecs.Huffman/CompressionLab.Codecs.Huffman.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/CompressionLab.Core/CompressionLab.Core.csproj" />
+    <ProjectReference Include="../../src/CompressionLab.Web/CompressionLab.Web.csproj" />
+    <ProjectReference Include="../../src/CompressionLab.Codecs.BuiltIn/CompressionLab.Codecs.BuiltIn.csproj" />
+    <ProjectReference Include="../../src/CompressionLab.Codecs.Rle/CompressionLab.Codecs.Rle.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/CompressionLab.Codecs.Lzma/CompressionLab.Codecs.Lzma.csproj" ReferenceOutputAssembly="false" />
+    <Content Include="../Fixtures/*" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CopyPlugins" AfterTargets="Build">
+    <ItemGroup>
+      <Plugins Include="../../src/CompressionLab.Codecs.Rle/bin/$(Configuration)/$(TargetFramework)/CompressionLab.Codecs.Rle.dll;../../src/CompressionLab.Codecs.Lzma/bin/$(Configuration)/$(TargetFramework)/CompressionLab.Codecs.Lzma.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(Plugins)" DestinationFolder="$(OutDir)plugins" />
+    <Copy SourceFiles="../../examples/CompressionLab.Codecs.Huffman/bin/$(Configuration)/$(TargetFramework)/CompressionLab.Codecs.Huffman.dll" DestinationFolder="$(OutDir)examples/Huffman" />
+  </Target>
+</Project>

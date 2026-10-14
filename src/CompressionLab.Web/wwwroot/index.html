@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Compression Lab · C#</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="app.js" defer></script>
+    <script src="updates.js" defer></script>
+</head>
+<body>
+    <aside>
+    <a class="brand" href="./">C<span>↳</span><div>COMPRESSION<br><b>LAB.</b></div></a><small>РАБОЧЕЕ ПРОСТРАНСТВО</small><nav><button class="active" data-view="experiments">◈ Эксперименты</button><button data-view="files">▱ Файлы</button><button data-view="codecs">▤ Методы сжатия</button><button data-view="queue">☷ Очередь задач</button><button data-view="updates">↻ Обновления</button></nav><div class="host"><i></i> Локальный хост<p>C# / ASP.NET Core<br>Все данные на вашем компьютере</p></div></aside>
+<div class="shell"><header><span>Лаборатория <em>/</em> <b id="crumb">Эксперименты</b></span><button id="update-banner" class="pill" hidden></button><span class="pill">● Локальная обработка</span></header><main>
+<section id="experiments"><div class="heading"><div><small>COMPRESSION LAB / C# EDITION</small><h1>Исследуйте сжатие.</h1><p>Собирайте цепочки, сравнивайте методы и проверяйте каждый байт.</p></div><button class="primary" id="run">▶ Запустить</button></div>
+<div class="stats"><article><small>ФАЙЛЫ</small><strong id="file-count">0</strong><span>в рабочем пространстве</span></article><article><small>МЕТОДЫ</small><strong id="codec-count">0</strong><span>включая внешние кодеки</span></article><article><small>ЭКСПЕРИМЕНТЫ</small><strong id="job-count">0</strong><span>выполнено и в очереди</span></article></div>
+<div class="columns"><article class="panel"><div class="panel-title"><h2>01 <span>Исходные файлы</span></h2><button id="demo">Тестовый набор</button></div><label class="drop" id="drop">＋<strong>Добавьте файлы</strong><span>Нажмите или перетащите сюда · до 256 МиБ на файл</span><input type="file" id="upload" multiple hidden></label><div id="file-select"></div></article>
+<article class="panel"><div class="panel-title"><h2>02 <span>Цепочки сжатия</span></h2><button id="add-chain">＋ Цепочка</button></div><p class="muted">Каждая цепочка — отдельный вариант сравнения. Шаги выполняются слева направо.</p><div id="chains"></div><div class="settings"><label>Блок<select id="block"><option value="65536">64 КиБ</option><option value="262144">256 КиБ</option><option value="1048576" selected>1 МиБ</option><option value="4194304">4 МиБ</option></select></label><label>Повторы<input id="repeats" type="number" min="1" max="10" value="3"></label><label>Прогрев<input id="warmup" type="number" min="0" max="3" value="1"></label></div></article></div>
+<article class="panel"><div class="panel-title"><h2>03 <span>Результаты сравнения</span></h2><div><a class="button" href="api/export.csv">CSV ↓</a> <a class="button" href="api/export.json">JSON ↓</a></div></div><label>Файл для сравнения <select id="result-file"><option value="">Все файлы</option></select></label><div id="chart"></div><div class="table-wrap"><table><thead><tr><th>Файл / цепочка</th><th>Размер архива</th><th>Сокращение</th><th>Сжатие</th><th>Распаковка</th><th>Проверка</th><th></th></tr></thead><tbody id="results"></tbody></table></div><p class="muted">Полный размер контейнера .clcs, включая заголовок. Время — медиана вызовов кодеков, без дискового ввода-вывода. Кодеки перезапускаются на границах блоков.</p></article></section>
+<section id="files" hidden><h1>Файлы</h1><p>Оригиналы и контрольные суммы хранятся локально.</p><article class="panel"><div id="files-list"></div></article><article class="panel"><h2>Восстановить архив</h2><p>Выберите .clcs, созданный этим приложением. Нужные кодеки должны быть установлены.</p><input type="file" id="restore" accept=".clcs"><p class="muted">Архивы .clab из Python-версии используют другой формат.</p></article></section>
+<section id="codecs" hidden><h1>Методы сжатия</h1><p>Отдельные реализации через единый контракт ICompressionCodec.</p><div id="codec-list" class="codec-grid"></div><article class="panel"><h2>Подключение своих кодеков</h2><p>Соберите библиотеку с реализацией ICompressionCodec и поместите её вместе с зависимостями в папку plugins рядом с приложением. Имя библиотеки: CompressionLab.Codecs.*.dll. После перезапуска она появится в списке и в редакторе цепочек.</p><p>Исходники LZMA находятся в отдельном проекте CompressionLab.Codecs.Lzma. Пример простого плагина — CompressionLab.Codecs.Rle.</p><div id="diagnostics"></div></article></section>
+<section id="queue" hidden><div class="heading"><div><h1>Очередь задач</h1><p>Один исполнитель для последовательного сравнения. Состояние сохраняется на диске.</p></div><button id="pause">Приостановить</button></div><div id="queue-list"></div></section>
+<section id="updates" hidden>
+  <h1>Обновления</h1>
+  <p>Проверка новых выпусков через GitHub Releases.</p>
+  <article class="panel">
+    <div class="panel-title"><h2><span>Установленная версия <b id="installed-version">…</b></span></h2><button id="check-updates">Проверить обновления</button></div>
+    <p id="update-message" role="status">Получаем сведения о версии…</p>
+    <p id="update-notes"></p>
+    <progress id="update-progress" hidden aria-label="Загрузка обновления"></progress>
+    <button id="install-update" class="primary" hidden>Скачать и установить</button>
+    <p class="muted">После установки приложение перезапустится. Файлы, результаты и ваши кодеки сохранятся. Текущий эксперимент нужно завершить перед обновлением.</p>
+  </article>
+</section></main><footer><b>COMPRESSION LAB.</b><span>Сравнивайте методы. Проверяйте данные.</span><span id="runtime">C#</span></footer></div><div id="notice" role="status" hidden></div></body></html>
+

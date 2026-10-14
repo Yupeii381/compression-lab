@@ -1,7 +1,8 @@
+**/bin/
+**/obj/
 data/
-.venv/
-vendor/
-__pycache__/
-*.pyc
-.env
-.tools/
+.vs/
+*.user
+plugins/
+.downloads/
+artifacts/

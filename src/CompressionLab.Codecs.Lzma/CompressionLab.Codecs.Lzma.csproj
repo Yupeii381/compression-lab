@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><Nullable>disable</Nullable></PropertyGroup><ItemGroup><ProjectReference Include="../CompressionLab.Contracts/CompressionLab.Contracts.csproj" /></ItemGroup></Project>

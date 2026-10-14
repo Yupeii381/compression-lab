@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <Version>1.3.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="../../docs/*.md" Link="docs/%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />
+    <Content Update="updates.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../distribution/README.txt" Link="README.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../CompressionLab.Codecs.Lzma/NOTICE.md" Link="licenses/LZMA-NOTICE.md" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../CompressionLab.Codecs.Lzma/Vendor/DOC/lzma-sdk.txt" Link="licenses/LZMA-SDK.txt" CopyToPublishDirectory="PreserveNewest" />
+    <Content Update="wwwroot/**/*" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../plugins/**/*" Link="plugins/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <ProjectReference Include="../CompressionLab.Core/CompressionLab.Core.csproj" />
+    <ProjectReference Include="../CompressionLab.Codecs.BuiltIn/CompressionLab.Codecs.BuiltIn.csproj" />
+    <ProjectReference Include="../CompressionLab.Codecs.Rle/CompressionLab.Codecs.Rle.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../CompressionLab.Codecs.Lzma/CompressionLab.Codecs.Lzma.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyPlugins" AfterTargets="Build">
+    <ItemGroup>
+      <CodecProjects Include="../CompressionLab.Codecs.Rle/CompressionLab.Codecs.Rle.csproj;../CompressionLab.Codecs.Lzma/CompressionLab.Codecs.Lzma.csproj" />
+    </ItemGroup>
+    <MSBuild Projects="@(CodecProjects)" Targets="GetTargetPath" Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework)" RemoveProperties="RuntimeIdentifier;SelfContained">
+      <Output TaskParameter="TargetOutputs" ItemName="CodecAssemblies" />
+    </MSBuild>
+    <Copy SourceFiles="@(CodecAssemblies)" DestinationFolder="$(OutDir)plugins/%(Filename)" />
+  </Target>
+  <Target Name="PublishPlugins" AfterTargets="Publish">
+    <Copy SourceFiles="@(CodecAssemblies)" DestinationFolder="$(PublishDir)plugins/%(Filename)" />
+  </Target>
+</Project>

@@ -1,0 +1,54 @@
+name: Build Windows release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate version tag
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw 'Use a stable tag such as v1.3.0'
+          }
+          "RELEASE_VERSION=$($env:RELEASE_TAG.Substring(1))" >> $env:GITHUB_ENV
+      - name: Run tests
+        run: dotnet run --project tests/CompressionLab.SelfTest -c Release
+      - name: Package self-contained application
+        shell: pwsh
+        env:
+          REPOSITORY_URL: https://github.com/${{ github.repository }}
+        run: ./tools/Publish-Release.ps1 -Version $env:RELEASE_VERSION -RepositoryUrl $env:REPOSITORY_URL
+      - name: Test release EXE
+        shell: pwsh
+        run: ./tests/release-smoke.ps1 -Executable "artifacts/releases/CompressionLab-$env:RELEASE_VERSION-win-x64/CompressionLab.Web.exe"
+      - name: Test update installation and rollback
+        shell: pwsh
+        env:
+          REPOSITORY_URL: https://github.com/${{ github.repository }}
+        run: |
+          $version = [Version]::Parse($env:RELEASE_VERSION)
+          $testVersion = "$($version.Major).$($version.Minor).$($version.Build + 1)"
+          ./tools/Publish-Release.ps1 -Version $testVersion -RepositoryUrl $env:REPOSITORY_URL -OutputRoot artifacts/update-test-packages
+          ./tests/update-integration.ps1 -BaseRelease "artifacts/releases/CompressionLab-$env:RELEASE_VERSION-win-x64" -NewPackage "artifacts/update-test-packages/CompressionLab-$testVersion-win-x64.zip"
+      - name: Publish release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create $env:RELEASE_TAG "artifacts/releases/CompressionLab-$env:RELEASE_VERSION-win-x64.zip" "artifacts/releases/CompressionLab-$env:RELEASE_VERSION-win-x64.zip.sha256" "artifacts/releases/update-win-x64.json" --verify-tag --title "Compression Lab $env:RELEASE_VERSION" --generate-notes

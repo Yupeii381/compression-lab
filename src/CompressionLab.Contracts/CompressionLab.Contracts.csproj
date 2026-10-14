@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Keep plugin ABI identity stable across application releases. -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+  </PropertyGroup>
+</Project>
