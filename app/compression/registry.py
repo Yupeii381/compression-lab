@@ -1,4 +1,4 @@
-from app.compression.alghorithms import rle, huffman, lz77, lz78, lzb, lzw, lzh, lzss
+from app.compression.alghorithms import rle, huffman, lz77, lz78, lzb, lzw, lzh, lzss, ssr
 from app.compression.adapters import brotli, bzip2, deflate, gzip, lz4, lzfse, lzma1, lzma2, ppmd, zstd
 
 def number(key, label, default, low, high, step=1):
@@ -24,6 +24,7 @@ METHODS = [
     dict(id="lzss", name="LZSS", family="LZ", description="LZSS: битовые флаги и ссылки фиксированной ширины.", implementation="Эталонная · Python", parameters=[number("window_kib", "Окно, КиБ", 32, 1, 64), number("search_depth", "Глубина поиска", 16, 1, 128)]),
     dict(id="lzb", name="LZB", family="LZ", description="LZB: растущая ширина расстояния + gamma-коды длин; фразы до 258 байт.", implementation="Эталонная · Python", parameters=[number("window_kib", "Окно, КиБ", 32, 1, 64), number("search_depth", "Глубина поиска", 16, 1, 128)]),
     dict(id="lzh", name="LZH", family="LZ", description="LZSS + статический Huffman символов/длин и классов расстояний; не LHA.", implementation="Эталонная · Python", parameters=[number("window_kib", "Окно, КиБ", 32, 1, 64), number("search_depth", "Глубина поиска", 16, 1, 128)]),
+    dict(id="ssr", name="SSR", familiy="null", description="Ну тут это короче вот то самое, если что не бейте, умоляю пжпж", implementation="Эталонная Python", parameters=[number("block_size", "Размер блока, бит", 256, 1, 2048)])
 ]
 BY_ID = {m["id"]: m for m in METHODS}
 
@@ -46,6 +47,7 @@ CODECS = {
     "lzss": lzss,
     "lzb": lzb,
     "lzh": lzh,
+    "ssr": ssr,
 }
 
 if CODECS.keys() != BY_ID.keys():
